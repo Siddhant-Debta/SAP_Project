@@ -8,7 +8,6 @@ import PyPDF2
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 import io
-from dotenv import load_dotenv
 from groq import Groq
 
 api_key = st.secrets["GROQ_API_KEY"]
