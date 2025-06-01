@@ -1,205 +1,321 @@
 import streamlit as st
-import requests
+import sqlite3
 import os
-api_key = st.secrets["GROQ_API_KEY"]
+import datetime
+import pandas as pd
+import json
+import PyPDF2
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+import io
+from dotenv import load_dotenv
+from groq import Groq
 
-BACKEND_URL = "http://127.0.0.1:5000"
+# Load environment variables for Groq API
+load_dotenv()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+client = Groq(api_key=GROQ_API_KEY)
 
+# Set up templates directory
+TEMPLATES_DIR = os.path.join(os.getcwd(), "templates")
+if not os.path.exists(TEMPLATES_DIR):
+    os.makedirs(TEMPLATES_DIR)
 
-# ✅ Login Page
-def login():
-    st.title("🔑 Login to AI Academic System")
-    username = st.text_input("Enter your username:")
-    role = st.selectbox("Select your role:", ["Student", "Mentor", "Admin"])
+# Database connection and initialization
+def get_db_connection():
+    conn = sqlite3.connect("leave_management.db", timeout=10, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
 
-    if st.button("Login") and username:
-        st.session_state["username"] = username
-        st.session_state["role"] = role
-        st.session_state["logged_in"] = True
-        st.query_params.update(role=role)  # Updated from experimental_set_query_params
+def initialize_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
 
-# ✅ Logout Function
-def logout():
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    st.query_params.clear()  # Updated from experimental_set_query_params
-    st.rerun()  # Updated from experimental_rerun
-
-# ✅ Navigation Bar
-def navigation_bar():
-    col1, col2, col3 = st.columns([1, 3, 1])
-    with col1:
-        if st.button("🔄 Refresh"):
-            st.rerun()  # Updated from experimental_rerun
-    with col3:
-        if st.button("🚪 Logout"):
-            logout()
-
-# ✅ Student Dashboard
-def student_dashboard():
-    st.title("🎓 Student Dashboard")
-    st.write(f"👋 Welcome, {st.session_state['username']}")
-    navigation_bar()
-
-    # 📚 Ask an Academic Question
-    st.subheader("📚 Ask an Academic Question")
-    question = st.text_input("Enter your question:")
-    if st.button("Ask"):
-        with st.spinner("🤖 Processing..."):
-            response = requests.post(f"{BACKEND_URL}/academic", json={"student_id": st.session_state["username"], "query": question})
-            if response.status_code == 200:
-                st.success(response.json().get("response", "❌ Error processing AI response."))
-            else:
-                st.error("❌ AI Error. Please try again.")
-
-    # 📝 Request Leave
-    st.subheader("📝 Request Leave")
-    leave_days = st.number_input("Number of Leave Days", min_value=1, step=1)
-    if st.button("Apply Leave"):
-        response = requests.post(f"{BACKEND_URL}/leave", json={"student_id": st.session_state["username"], "days": leave_days})
-        if response.status_code == 200:
-            st.success(response.json().get("message", "❌ Error processing response."))
-        else:
-            st.error("❌ Backend error.")
-
-    # 📌 Leave Status
-    st.subheader("📌 Your Leave Requests")
-    response = requests.get(f"{BACKEND_URL}/student-leave-status", params={"student_id": st.session_state["username"]})
-
-    if response.status_code == 200:
-        leave_requests = response.json().get("requests", [])
-        if leave_requests:
-            for req in leave_requests:
-                st.write(f"📌 **Mentor:** {req['mentor_id']} | **Days:** {req['days']} | **Status:** {req['status']}")
-        else:
-            st.write("No leave requests found.")
-    else:
-        st.error("❌ Error fetching leave status.")
-
-    # 📜 Generate Certificate
-    st.subheader("📜 Generate Certificate")
-    cert_type = st.selectbox("Select Certificate Type:", ["Bonafide", "NOC"])
-
-    # Custom template option
-    use_custom_template = st.checkbox("Use custom template")
-    custom_template = None
-
-    if use_custom_template:
-        st.write("Upload your custom certificate template (PDF):")
-        template_file = st.file_uploader("Upload template", type=["pdf"])
-        if template_file:
-            custom_template = template_file.getvalue()
-
-    if st.button("Generate Certificate"):
-        payload = {
-            "student_id": st.session_state["username"],
-            "cert_type": cert_type
-        }
-
-        files = {}
-        if custom_template:
-            files = {"template": ("template.pdf", custom_template, "application/pdf")}
-
-        if files:
-            response = requests.post(f"{BACKEND_URL}/certificate", data=payload, files=files, stream=True)
-        else:
-            response = requests.post(f"{BACKEND_URL}/certificate", json=payload, stream=True)
-
-        if response.status_code == 200:
-            # Save the generated certificate locally
-            cert_filename = f"{st.session_state['username']}_certificate.pdf"
-            with open(cert_filename, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-
-            st.success("✅ Certificate generated successfully!")
-            st.download_button("📥 Download Certificate", open(cert_filename, "rb"), file_name=cert_filename, mime="application/pdf")
-
-        else:
-            st.error("❌ Error generating certificate. Please try again.")
-
-
-# ✅ Mentor Dashboard
-def mentor_dashboard():
-    st.title("👨‍🏫 Mentor Dashboard")
-    st.write(f"👋 Welcome, {st.session_state['username']}")
-    navigation_bar()
-
-    # 📌 Leave Requests
-    st.subheader("📌 Pending Leave Requests")
-    response = requests.get(f"{BACKEND_URL}/mentor-leave-requests", params={"mentor_id": st.session_state["username"]})
-
-    if response.status_code == 200:
-        leave_requests = response.json().get("requests", [])
-        if leave_requests:
-            for req in leave_requests:
-                st.write(f"📌 **Student:** {req['student_id']} | **Days:** {req['days']} | **Status:** {req['status']}")
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button(f"✅ Approve {req['id']}"):
-                        requests.post(f"{BACKEND_URL}/approve-leave", json={"leave_id": req["id"]})
-                        st.success("✅ Leave Approved!")
-                with col2:
-                    if st.button(f"❌ Reject {req['id']}"):
-                        requests.post(f"{BACKEND_URL}/reject-leave", json={"leave_id": req["id"]})
-                        st.error("❌ Leave Rejected!")
-        else:
-            st.write("No pending leave requests.")
-    else:
-        st.error("❌ Error fetching leave requests.")
-
-# ✅ Admin Dashboard
-def admin_dashboard():
-    st.title("⚙️ Admin Dashboard")
-    navigation_bar()
-
-    # 📂 Upload AI Training Data
-    st.subheader("📂 Upload AI Training Data (JSON/CSV/Excel/PDF)")
-    uploaded_file = st.file_uploader("Upload JSON/CSV/Excel/PDF File", type=["csv", "xlsx", "json", "pdf"])
-    if uploaded_file and st.button("Upload"):
-        files = {"file": (uploaded_file.name, uploaded_file.getvalue())}
-        response = requests.post(f"{BACKEND_URL}/upload-data", files=files)
-        if response.status_code == 200:
-            st.success(response.json().get("message", "✅ File uploaded successfully!"))
-        else:
-            st.error("❌ Error processing file.")
-
-    # 👨‍🏫 Assign Mentors
-    st.subheader("👨‍🏫 Assign Mentors to Students")
-    student_id = st.text_input("Enter Student ID:")
-    mentor_id = st.text_input("Enter Mentor ID:")
-    if st.button("Assign Mentor"):
-        response = requests.post(f"{BACKEND_URL}/assign-mentor", json={"student_id": student_id, "mentor_id": mentor_id})
-        if response.status_code == 200:
-            st.success(response.json().get("message", "✅ Mentor assigned successfully!"))
-        else:
-            st.error("❌ Error assigning mentor.")
-
-    # 📜 Manage Certificate Templates
-    st.subheader("📜 Manage Certificate Templates")
-    template_type = st.selectbox("Template Type:", ["Bonafide", "NOC"])
-    template_file = st.file_uploader("Upload Default Template", type=["pdf"])
-
-    if template_file and st.button("Set Default Template"):
-        files = {"template": (template_file.name, template_file.getvalue())}
-        response = requests.post(
-            f"{BACKEND_URL}/set-template",
-            data={"template_type": template_type},
-            files=files
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leave_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT,
+            mentor_id TEXT,
+            days INTEGER,
+            start_date TEXT DEFAULT CURRENT_DATE,
+            end_date TEXT,
+            status TEXT CHECK(status IN ('pending', 'approved', 'rejected'))
         )
-        if response.status_code == 200:
-            st.success("✅ Default template updated successfully!")
-        else:
-            st.error("❌ Error updating template.")
+    """)
 
-# ✅ Main App Logic
-if "logged_in" not in st.session_state:
-    login()
-else:
-    role = st.session_state["role"]
-    if role == "Student":
-        student_dashboard()
-    elif role == "Mentor":
-        mentor_dashboard()
-    elif role == "Admin":
-        admin_dashboard()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS mentor_assignments (
+            student_id TEXT PRIMARY KEY,
+            mentor_id TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS academic_docs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS certificate_templates (
+            template_type TEXT PRIMARY KEY,
+            file_path TEXT
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+initialize_db()
+
+# ---- Backend Logic Functions ----
+
+def assign_mentor(student_id, mentor_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO mentor_assignments (student_id, mentor_id) VALUES (?, ?)", (student_id, mentor_id))
+    conn.commit()
+    conn.close()
+
+def process_leave_request(student_id, days):
+    start_date = datetime.date.today().strftime("%Y-%m-%d")
+    end_date = (datetime.date.today() + datetime.timedelta(days=days)).strftime("%Y-%m-%d")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT mentor_id FROM mentor_assignments WHERE student_id = ?", (student_id,))
+    mentor = cursor.fetchone()
+
+    if days <= 5:
+        status = "approved"
+        mentor_id = "Auto-Approved"
+    elif mentor:
+        status = "pending"
+        mentor_id = mentor["mentor_id"]
+    else:
+        conn.close()
+        return False, "No mentor found for this student."
+
+    cursor.execute("""
+        INSERT INTO leave_requests (student_id, mentor_id, days, start_date, end_date, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (student_id, mentor_id, days, start_date, end_date, status))
+
+    conn.commit()
+    conn.close()
+
+    return True, f"Leave request for {days} days sent to {mentor_id}. Status: {status}."
+
+def get_student_leave_status(student_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT mentor_id, days, start_date, end_date, status FROM leave_requests WHERE student_id = ?", (student_id,))
+    requests = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in requests]
+
+def get_mentor_leave_requests(mentor_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, student_id, days, start_date, end_date, status FROM leave_requests WHERE mentor_id = ? AND status = 'pending'", (mentor_id,))
+    requests = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in requests]
+
+def approve_leave_request(leave_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE leave_requests SET status = 'approved' WHERE id = ?", (leave_id,))
+    conn.commit()
+    conn.close()
+
+def reject_leave_request(leave_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE leave_requests SET status = 'rejected' WHERE id = ?", (leave_id,))
+    conn.commit()
+    conn.close()
+
+def upload_ai_training_data(file):
+    filename = file.name
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        if filename.endswith(".csv") or filename.endswith(".xlsx"):
+            df = pd.read_csv(file) if filename.endswith(".csv") else pd.read_excel(file)
+            for _, row in df.iterrows():
+                cursor.execute("INSERT INTO academic_docs (content) VALUES (?)", (json.dumps(row.to_dict()),))
+            conn.commit()
+
+        elif filename.endswith(".json"):
+            data = json.load(file)
+            cursor.execute("INSERT INTO academic_docs (content) VALUES (?)", (json.dumps(data),))
+            conn.commit()
+
+        elif filename.endswith(".pdf"):
+            reader = PyPDF2.PdfReader(file)
+            text = "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
+            cursor.execute("INSERT INTO academic_docs (content) VALUES (?)", (text,))
+            conn.commit()
+        else:
+            conn.close()
+            return False, "Invalid file format. Supported formats: CSV, XLSX, JSON, PDF"
+
+        conn.close()
+        return True, "AI Training Data Uploaded Successfully."
+
+    except Exception as e:
+        conn.close()
+        return False, f"Error processing file: {str(e)}"
+
+def academic_query(query):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT content FROM academic_docs")
+    documents = cursor.fetchall()
+    conn.close()
+
+    if not documents:
+        return "No academic data available. Please upload training data."
+
+    knowledge_base = " ".join([doc[0] for doc in documents])[:4000]
+
+    try:
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": "You are a helpful academic assistant."},
+                {"role": "user", "content": f"{query}\n\nContext:\n{knowledge_base}"}
+            ],
+            model="llama-3.3-70b-versatile",
+        )
+
+        ai_response = chat_completion.choices[0].message.content
+        return ai_response
+
+    except Exception as e:
+        return f"AI Error: {str(e)}"
+
+def set_certificate_template(template_type, template_file):
+    template_filename = f"{template_type.lower()}_template.pdf"
+    template_path = os.path.join(TEMPLATES_DIR, template_filename)
+    with open(template_path, "wb") as f:
+        f.write(template_file.getbuffer())
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO certificate_templates (template_type, file_path) VALUES (?, ?)",
+        (template_type, template_path)
+    )
+    conn.commit()
+    conn.close()
+
+def generate_certificate(student_id, cert_type):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT file_path FROM certificate_templates WHERE template_type = ?", (cert_type,))
+    template_record = cursor.fetchone()
+    conn.close()
+
+    filename = f"{student_id}_{cert_type.lower()}_certificate.pdf"
+    filepath = os.path.join(os.getcwd(), filename)
+
+    if template_record and os.path.exists(template_record["file_path"]):
+        # Use the stored template to create certificate with overlay
+        template_path = template_record["file_path"]
+        reader = PyPDF2.PdfReader(template_path)
+        writer = PyPDF2.PdfWriter()
+        page = reader.pages[0]
+
+        # Create overlay PDF with data
+        overlay_bytes = io.BytesIO()
+        c = canvas.Canvas(overlay_bytes, pagesize=letter)
+        c.setFont("Helvetica", 12)
+        c.drawString(100, 400, f"Student ID: {student_id}")
+        c.drawString(100, 380, f"Certificate Type: {cert_type}")
+        current_date = datetime.date.today().strftime("%d-%m-%Y")
+        c.drawString(100, 360, f"Date Issued: {current_date}")
+        c.save()
+
+        overlay_bytes.seek(0)
+        overlay_pdf = PyPDF2.PdfReader(overlay_bytes)
+        page.merge_page(overlay_pdf.pages[0])
+        writer.add_page(page)
+
+        with open(filepath, "wb") as output_file:
+            writer.write(output_file)
+    else:
+        # Generate a simple certificate from scratch
+        c = canvas.Canvas(filepath, pagesize=letter)
+        c.setTitle(f"{cert_type} Certificate")
+        c.setFont("Helvetica-Bold", 24)
+        c.drawCentredString(300, 750, "ACADEMIC INSTITUTION")
+        c.setFont("Helvetica-Bold", 22)
+        c.drawCentredString(300, 700, f"{cert_type} Certificate")
+
+        c.setFont("Helvetica", 14)
+        current_date = datetime.date.today().strftime("%d-%m-%Y")
+
+        if cert_type.lower() == "bonafide":
+            c.drawString(50, 600, f"This is to certify that {student_id} is a bonafide student")
+            c.drawString(50, 580, "of our institution and is currently pursuing their education with us.")
+        elif cert_type.lower() == "noc":
+            c.drawString(50, 600, f"This is to certify that {student_id} is granted a No Objection")
+            c.drawString(50, 580, "Certificate for their intended activities outside the institution.")
+
+        c.drawString(50, 400, f"Date: {current_date}")
+        c.drawString(400, 400, "Signature")
+        c.drawString(400, 380, "________________")
+        c.drawString(400, 360, "Principal")
+
+        c.rect(20, 20, 555, 800, stroke=1, fill=0)
+
+        c.save()
+
+    with open(filepath, "rb") as f:
+        pdf_bytes = f.read()
+
+    # Clean up after reading
+    if os.path.exists(filepath):
+        os.remove(filepath)
+
+    return pdf_bytes
+
+# ---- Streamlit UI ----
+
+st.title("🎓 Student & Mentor Management Dashboard")
+
+# Simple login simulation
+if "username" not in st.session_state:
+    st.session_state["username"] = None
+if "role" not in st.session_state:
+    st.session_state["role"] = "student"  # or "mentor" or "admin"
+
+def login():
+    st.session_state["username"] = st.session_state["input_username"]
+    # For demo, assign roles simply by username:
+    if st.session_state["username"].startswith("mentor"):
+        st.session_state["role"] = "mentor"
+    elif st.session_state["username"].startswith("admin"):
+        st.session_state["role"] = "admin"
+    else:
+        st.session_state["role"] = "student"
+    st.success(f"Logged in as {st.session_state['username']} ({st.session_state['role']})")
+
+if not st.session_state["username"]:
+    st.text_input("Enter your username", key="input_username")
+    st.button("Login", on_click=login)
+    st.stop()
+
+st.write(f"Welcome, **{st.session_state['username']}**! Role: **{st.session_state['role']}**")
+
+# Student Dashboard
+if st.session_state["role"] == "student":
+    st.header("📚 Ask an Academic Question")
+    query = st.text_area("Enter your academic question here:")
+    if st.button("Ask"):
+        if query.strip() == "":
+            st.warning("Please enter a question.")
+        else
