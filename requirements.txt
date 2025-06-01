@@ -1,0 +1,10 @@
+Flask
+pandas
+streamlit
+groq
+PyPDF2
+reportlab
+requests
+flask
+gunicorn
+requests
