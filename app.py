@@ -1,10 +1,8 @@
 import streamlit as st
 import requests
 import os
-from dotenv import load_dotenv
+api_key = st.secrets["GROQ_API_KEY"]
 
-# Load environment variables
-load_dotenv()
 BACKEND_URL = "http://127.0.0.1:5000"
 
 
