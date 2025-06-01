@@ -318,4 +318,88 @@ if st.session_state["role"] == "student":
     if st.button("Ask"):
         if query.strip() == "":
             st.warning("Please enter a question.")
-        else
+        else:
+            with st.spinner("Getting answer from AI..."):
+                answer = academic_query(query)
+            st.markdown(f"**Answer:** {answer}")
+
+    st.header("📝 Request Leave")
+    leave_days = st.number_input("Number of leave days:", min_value=1, max_value=30, step=1)
+    if st.button("Submit Leave Request"):
+        success, message = process_leave_request(st.session_state["username"], leave_days)
+        if success:
+            st.success(message)
+        else:
+            st.error(message)
+
+    st.header("📌 Your Leave Requests")
+    leave_requests = get_student_leave_status(st.session_state["username"])
+    if leave_requests:
+        for lr in leave_requests:
+            st.write(f"- Days: {lr['days']}, From: {lr['start_date']} To: {lr['end_date']}, Status: {lr['status']} (Mentor: {lr['mentor_id']})")
+    else:
+        st.write("No leave requests found.")
+
+    st.header("📤 Upload Academic Training Data")
+    file = st.file_uploader("Upload CSV, XLSX, JSON, or PDF file for AI training data:")
+    if file is not None:
+        success, msg = upload_ai_training_data(file)
+        if success:
+            st.success(msg)
+        else:
+            st.error(msg)
+
+    st.header("📄 Generate Certificate")
+    cert_type = st.selectbox("Select certificate type:", ["Bonafide", "NOC"])
+    if st.button("Generate Certificate"):
+        pdf_bytes = generate_certificate(st.session_state["username"], cert_type)
+        st.download_button(
+            label=f"Download {cert_type} Certificate",
+            data=pdf_bytes,
+            file_name=f"{cert_type}_{st.session_state['username']}.pdf",
+            mime="application/pdf"
+        )
+
+# Mentor Dashboard
+elif st.session_state["role"] == "mentor":
+    st.header("📝 Leave Requests from Students")
+    mentor_id = st.session_state["username"]
+    requests = get_mentor_leave_requests(mentor_id)
+    if requests:
+        for req in requests:
+            st.write(f"Student: {req['student_id']} - Days: {req['days']}, From: {req['start_date']} To: {req['end_date']}")
+            cols = st.columns(2)
+            if cols[0].button(f"Approve {req['id']}"):
+                approve_leave_request(req['id'])
+                st.experimental_rerun()
+            if cols[1].button(f"Reject {req['id']}"):
+                reject_leave_request(req['id'])
+                st.experimental_rerun()
+    else:
+        st.write("No pending leave requests.")
+
+# Admin Dashboard for mentor assignment & template upload
+elif st.session_state["role"] == "admin":
+    st.header("🧑‍🏫 Assign Mentor to Student")
+    student_id = st.text_input("Student ID:")
+    mentor_id = st.text_input("Mentor ID:")
+    if st.button("Assign Mentor"):
+        if student_id and mentor_id:
+            assign_mentor(student_id, mentor_id)
+            st.success(f"Mentor {mentor_id} assigned to student {student_id}.")
+        else:
+            st.error("Please provide both Student ID and Mentor ID.")
+
+    st.header("📁 Upload Certificate Template")
+    template_type = st.selectbox("Select certificate template type:", ["Bonafide", "NOC"])
+    template_file = st.file_uploader("Upload PDF template file:")
+    if template_file is not None:
+        if st.button("Upload Template"):
+            if template_file.type == "application/pdf":
+                set_certificate_template(template_type, template_file)
+                st.success(f"{template_type} certificate template uploaded successfully.")
+            else:
+                st.error("Please upload a PDF file.")
+
+else:
+    st.error("Unknown role. Please login again.")
